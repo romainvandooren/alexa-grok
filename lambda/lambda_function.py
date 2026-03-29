@@ -8,12 +8,12 @@ import requests
 import logging
 import json
 import re
+import os
 
-# Set your OpenAI API key
-
-api_key = "YOUR_API_KEY"
-
-model = "gpt-4o-mini"
+# Set your xAI API key
+XAI_API_KEY = os.environ.get("XAI_API_KEY", "YOUR_API_KEY")
+XAI_MODEL = "grok-4-1-fast-non-reasoning"
+XAI_BASE_URL = "https://api.x.ai/v1"
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -27,7 +27,7 @@ class LaunchRequestHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speak_output = "Chat G.P.T. mode activated"
+        speak_output = "Grok mode activated"
 
         session_attr = handler_input.attributes_manager.session_attributes
         session_attr["chat_history"] = []
@@ -39,10 +39,11 @@ class LaunchRequestHandler(AbstractRequestHandler):
                 .response
         )
 
-class GptQueryIntentHandler(AbstractRequestHandler):
-    """Handler for Gpt Query Intent."""
+class GrokQueryIntentHandler(AbstractRequestHandler):
+    """Handler for Grok Query Intent."""
     def can_handle(self, handler_input):
         # type: (HandlerInput) -> bool
+        # Keeping GptQueryIntent for model compatibility
         return ask_utils.is_intent_name("GptQueryIntent")(handler_input)
 
     def handle(self, handler_input):
@@ -58,7 +59,7 @@ class GptQueryIntentHandler(AbstractRequestHandler):
         processed_query, is_followup = process_followup_question(query, session_attr.get("last_context"))
         
         # Generate response with enhanced context handling
-        response_data = generate_gpt_response(session_attr["chat_history"], processed_query, is_followup)
+        response_data = generate_grok_response(session_attr["chat_history"], processed_query, is_followup)
         
         # Handle the response data which could be a tuple or string
         if isinstance(response_data, tuple) and len(response_data) == 2:
@@ -129,7 +130,7 @@ class CancelOrStopIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speak_output = "Leaving Chat G.P.T. mode"
+        speak_output = "Leaving Grok mode"
 
         return (
             handler_input.response_builder
@@ -158,7 +159,7 @@ def process_followup_question(question, last_context):
             break
     
     # If it's a follow-up and we have context, we don't need to modify the question
-    # The context will be handled in the generate_gpt_response function
+    # The context will be handled in the generate_grok_response function
     return question, is_followup
 
 def extract_context(question, response):
@@ -171,10 +172,10 @@ def generate_followup_questions(conversation_context, query, response, count=2):
     """Generates concise follow-up questions based on the conversation context"""
     try:
         headers = {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {XAI_API_KEY}",
             "Content-Type": "application/json"
         }
-        url = "https://api.openai.com/v1/chat/completions"
+        url = f"{XAI_BASE_URL}/chat/completions"
         
         # Prepare a focused prompt for brief follow-ups
         messages = [
@@ -195,7 +196,7 @@ def generate_followup_questions(conversation_context, query, response, count=2):
         messages.append({"role": "user", "content": "Follow-up questions (separated by |):"})
         
         data = {
-            "model": "gpt-3.5-turbo",  # Using a faster model for this
+            "model": XAI_MODEL,  # Using Grok model
             "messages": messages,
             "max_completion_tokens": 50,
             "temperature": 0.7
@@ -223,13 +224,13 @@ def generate_followup_questions(conversation_context, query, response, count=2):
         logger.error(f"Error in generate_followup_questions: {str(e)}")
         return ["Tell me more", "Give me an example"]
 
-def generate_gpt_response(chat_history, new_question, is_followup=False):
-    """Generates a GPT response to a question with enhanced context handling"""
+def generate_grok_response(chat_history, new_question, is_followup=False):
+    """Generates a Grok response to a question with enhanced context handling"""
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {XAI_API_KEY}",
         "Content-Type": "application/json"
     }
-    url = "https://api.openai.com/v1/chat/completions"
+    url = f"{XAI_BASE_URL}/chat/completions"
     
     # Create a more informative system message based on whether this is a follow-up
     system_message = "You are a helpful assistant. Answer in 50 words or less."
@@ -249,7 +250,7 @@ def generate_gpt_response(chat_history, new_question, is_followup=False):
     messages.append({"role": "user", "content": new_question})
     
     data = {
-        "model": model,
+        "model": XAI_MODEL,
         "messages": messages,
         "max_completion_tokens": 300
     }
@@ -275,7 +276,10 @@ def generate_gpt_response(chat_history, new_question, is_followup=False):
             
             return response_text, followup_questions
         else:
-            return f"Error {response.status_code}: {response_data['error']['message']}", []
+            error_msg = response_data.get('error')
+            if isinstance(error_msg, dict):
+                error_msg = error_msg.get('message', 'Unknown error')
+            return f"Error {response.status_code}: {error_msg}", []
     except Exception as e:
         logger.error(f"Error generating response: {str(e)}")
         return f"Error generating response: {str(e)}", []
@@ -304,7 +308,7 @@ class ClearContextIntentHandler(AbstractRequestHandler):
 sb = SkillBuilder()
 
 sb.add_request_handler(LaunchRequestHandler())
-sb.add_request_handler(GptQueryIntentHandler())
+sb.add_request_handler(GrokQueryIntentHandler())
 sb.add_request_handler(ClearContextIntentHandler())
 sb.add_request_handler(CancelOrStopIntentHandler())
 sb.add_exception_handler(CatchAllExceptionHandler())

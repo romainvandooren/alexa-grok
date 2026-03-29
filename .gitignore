@@ -1,0 +1,21 @@
+# Environments
+venv/
+.venv/
+env/
+.env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+
+# Alexa/ASK
+.ask/
+ask-states.json

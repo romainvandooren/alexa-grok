@@ -1,10 +1,10 @@
-# Alexa GPT
+# Alexa Grok
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Boost your Alexa by making it respond as ChatGPT.
+Boost your Alexa by making it respond as Grok.
 
-This repository contains a tutorial on how to create a simple Alexa skill that uses the OpenAI API to generate responses from the ChatGPT model.
+This repository contains a tutorial on how to create a simple Alexa skill that uses the xAI Grok API to generate responses.
 
 <div align="center">
   <img src="images/test.png" />
@@ -13,7 +13,7 @@ This repository contains a tutorial on how to create a simple Alexa skill that u
 ## Prerequisites
 
 - An [Amazon Developer account](https://developer.amazon.com/)
-- An [OpenAI API key](https://platform.openai.com/api-keys)
+- An [xAI API key](https://console.x.ai/)
 
 ## Step-by-step tutorial
 
@@ -21,7 +21,7 @@ This repository contains a tutorial on how to create a simple Alexa skill that u
 Log in to your Amazon Developer account and navigate to the [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask).
 
 ### 2.
-Click on "Create Skill" and name the skill "Chat". Choose the primary locale according to your language.
+Click on "Create Skill" and name the skill "Grok". Choose the primary locale according to your language.
 
 ![name your skill](images/name_your_skill.png)
 
@@ -102,19 +102,19 @@ However, if you chose to manually create the skill, replace the existing JSON co
 Save the model and click on "Build Model".
 
 ### 9.
-Go to "Code" section and add "openai" to requirements.txt. Your requirements.txt should look like this:
+Go to "Code" section and add "requests" to requirements.txt. Your requirements.txt should look like this:
 
 ```txt
-ask-sdk-core==1.11.0
-boto3==1.9.216
+ask-sdk-core==1.19.0
+boto3==1.28.78
 requests>=2.20.0
 ```
 
 ### 10.
-Create an OpenAI API key on the [API keys page](https://platform.openai.com/api-keys) by clicking "+ Create new secret key".
+Create an xAI API key on the [xAI Console](https://console.x.ai/) by clicking on "API Keys".
 
 ### 11.
-Replace your lambda_functions.py file with the [provided lambda_function.py](lambda/lambda_function.py).
+Replace your lambda_function.py file with the [provided lambda_function.py](lambda/lambda_function.py).
 
 ```python
 from ask_sdk_core.dispatch_components import AbstractExceptionHandler
@@ -126,9 +126,13 @@ import ask_sdk_core.utils as ask_utils
 import requests
 import logging
 import json
+import re
+import os
 
-# Set your OpenAI API key
-api_key = "YOUR_API_KEY"
+# Set your xAI API key
+XAI_API_KEY = os.environ.get("XAI_API_KEY", "YOUR_API_KEY")
+XAI_MODEL = "grok-4-1-fast-non-reasoning"
+XAI_BASE_URL = "https://api.x.ai/v1"
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -142,7 +146,7 @@ class LaunchRequestHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speak_output = "Chat G.P.T. mode activated"
+        speak_output = "Grok mode activated"
 
         session_attr = handler_input.attributes_manager.session_attributes
         session_attr["chat_history"] = []
@@ -154,10 +158,11 @@ class LaunchRequestHandler(AbstractRequestHandler):
                 .response
         )
 
-class GptQueryIntentHandler(AbstractRequestHandler):
-    """Handler for Gpt Query Intent."""
+class GrokQueryIntentHandler(AbstractRequestHandler):
+    """Handler for Grok Query Intent."""
     def can_handle(self, handler_input):
         # type: (HandlerInput) -> bool
+        # Keeping GptQueryIntent for model compatibility
         return ask_utils.is_intent_name("GptQueryIntent")(handler_input)
 
     def handle(self, handler_input):
@@ -167,15 +172,54 @@ class GptQueryIntentHandler(AbstractRequestHandler):
         session_attr = handler_input.attributes_manager.session_attributes
         if "chat_history" not in session_attr:
             session_attr["chat_history"] = []
-        response = generate_gpt_response(session_attr["chat_history"], query)
-        session_attr["chat_history"].append((query, response))
-
+            session_attr["last_context"] = None
+        
+        # Process the query to determine if it's a follow-up question
+        processed_query, is_followup = process_followup_question(query, session_attr.get("last_context"))
+        
+        # Generate response with enhanced context handling
+        response_data = generate_grok_response(session_attr["chat_history"], processed_query, is_followup)
+        
+        # Handle the response data which could be a tuple or string
+        if isinstance(response_data, tuple) and len(response_data) == 2:
+            response_text, followup_questions = response_data
+        else:
+            # Fallback for error cases
+            response_text = str(response_data)
+            followup_questions = []
+        
+        # Store follow-up questions in the session
+        session_attr["followup_questions"] = followup_questions
+        
+        # Update the conversation history with just the response text, not the questions
+        session_attr["chat_history"].append((query, response_text))
+        session_attr["last_context"] = extract_context(query, response_text)
+        
+        # Format the response with follow-up suggestions if available
+        response = response_text
+        if followup_questions and len(followup_questions) > 0:
+            # Add a short pause before the suggestions
+            response += " <break time=\"0.5s\"/> "
+            response += "You could ask: "
+            # Join with 'or' for the last question
+            if len(followup_questions) > 1:
+                response += ", ".join([f"'{q}'" for q in followup_questions[:-1]])
+                response += f", or '{followup_questions[-1]}'"
+            else:
+                response += f"'{followup_questions[0]}'"
+            response += ". <break time=\"0.5s\"/> What would you like to know?"
+        
+        # Prepare response with reprompt that includes the follow-up questions
+        reprompt_text = "You can ask me another question or say stop to end the conversation."
+        if 'followup_questions' in session_attr and session_attr['followup_questions']:
+            reprompt_text = "You can ask me another question, say 'next' to hear more suggestions, or say stop to end the conversation."
+        
         return (
-                handler_input.response_builder
-                    .speak(response)
-                    .ask("Any other questions?")
-                    .response
-            )
+            handler_input.response_builder
+                .speak(response)
+                .ask(reprompt_text)
+                .response
+        )
 
 class CatchAllExceptionHandler(AbstractExceptionHandler):
     """Generic error handling to capture any syntax or routing errors."""
@@ -205,7 +249,7 @@ class CancelOrStopIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speak_output = "Leaving Chat G.P.T. mode"
+        speak_output = "Leaving Grok mode"
 
         return (
             handler_input.response_builder
@@ -213,39 +257,178 @@ class CancelOrStopIntentHandler(AbstractRequestHandler):
                 .response
         )
 
-def generate_gpt_response(chat_history, new_question):
-    """Generates a GPT response to a new question"""
+def process_followup_question(question, last_context):
+    """Processes a question to determine if it's a follow-up and enhances it with context if needed"""
+    # Common follow-up indicators
+    followup_patterns = [
+        r'^(what|how|why|when|where|who|which)\s+(about|is|are|was|were|do|does|did|can|could|would|should|will)\s',
+        r'^(and|but|so|then|also)\s',
+        r'^(can|could|would|should|will)\s+(you|it|they|we)\s',
+        r'^(is|are|was|were|do|does|did)\s+(it|that|this|they|those|these)\s',
+        r'^(tell me more|elaborate|explain further)\s*',
+        r'^(why|how)\?*$'
+    ]
+    
+    is_followup = False
+    
+    # Check if the question matches any follow-up patterns
+    for pattern in followup_patterns:
+        if re.search(pattern, question.lower()):
+            is_followup = True
+            break
+    
+    # If it's a follow-up and we have context, we don't need to modify the question
+    # The context will be handled in the generate_grok_response function
+    return question, is_followup
+
+def extract_context(question, response):
+    """Extracts the main context from a Q&A pair for future reference"""
+    # This is a simple implementation that just returns the question and response
+    # In a more advanced implementation, you could use NLP to extract key entities
+    return {"question": question, "response": response}
+
+def generate_followup_questions(conversation_context, query, response, count=2):
+    """Generates concise follow-up questions based on the conversation context"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {XAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        url = f"{XAI_BASE_URL}/chat/completions"
+        
+        # Prepare a focused prompt for brief follow-ups
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant that suggests short follow-up questions."},
+            {"role": "user", "content": \"\"\"Based on the conversation, suggest 2 very short follow-up questions (max 4 words each). 
+            Make them direct and simple. Return ONLY the questions separated by '|'.
+            Example: What's the capital?|How big is it?\"\"\"}
+        ]
+        
+        # Add conversation context
+        if conversation_context:
+            last_q, last_a = conversation_context[-1]
+            messages.append({"role": "user", "content": f"Previous Q: {last_q}"})
+            messages.append({"role": "assistant", "content": last_a})
+        
+        messages.append({"role": "user", "content": f"Current Q: {query}"})
+        messages.append({"role": "assistant", "content": response})
+        messages.append({"role": "user", "content": "Follow-up questions (separated by |):"})
+        
+        data = {
+            "model": XAI_MODEL,  # Using Grok model
+            "messages": messages,
+            "max_completion_tokens": 50,
+            "temperature": 0.7
+        }
+        
+        response = requests.post(url, headers=headers, data=json.dumps(data), timeout=3)
+        if response.ok:
+            questions_text = response.json()['choices'][0]['message']['content'].strip()
+            # Clean and split the response
+            questions = [q.strip().rstrip('?') for q in questions_text.split('|') if q.strip()]
+            # Ensure we have valid questions
+            questions = [q for q in questions if len(q.split()) <= 4 and len(q) > 0][:2]
+            
+            # If we don't have enough questions, provide defaults
+            if len(questions) < 2:
+                questions = ["Tell me more", "Give me an example"]
+                
+            logger.info(f"Generated follow-up questions: {questions}")
+            return questions
+            
+        logger.error(f"API Error: {response.text}")
+        return ["Tell me more", "Give me an example"]
+        
+    except Exception as e:
+        logger.error(f"Error in generate_followup_questions: {str(e)}")
+        return ["Tell me more", "Give me an example"]
+
+def generate_grok_response(chat_history, new_question, is_followup=False):
+    """Generates a Grok response to a question with enhanced context handling"""
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {XAI_API_KEY}",
         "Content-Type": "application/json"
     }
-    url = "https://api.openai.com/v1/chat/completions"
-    messages = [{"role": "system", "content": "You are a helpful assistant. Answer in 50 words or less."}]
-    for question, answer in chat_history[-10:]:
+    url = f"{XAI_BASE_URL}/chat/completions"
+    
+    # Create a more informative system message based on whether this is a follow-up
+    system_message = "You are a helpful assistant. Answer in 50 words or less."
+    if is_followup:
+        system_message += " This is a follow-up question to the previous conversation. Maintain context without repeating information already provided."
+    
+    messages = [{"role": "system", "content": system_message}]
+    
+    # Include relevant conversation history
+    # For follow-ups, we include more context. For new questions, we limit to save tokens
+    history_limit = 10 if not is_followup else 5
+    for question, answer in chat_history[-history_limit:]:
         messages.append({"role": "user", "content": question})
         messages.append({"role": "assistant", "content": answer})
+    
+    # Add the new question
     messages.append({"role": "user", "content": new_question})
     
     data = {
-        "model": "gpt-4o-mini",
+        "model": XAI_MODEL,
         "messages": messages,
-        "max_tokens": 300,
-        "temperature": 0.5
+        "max_completion_tokens": 300
     }
+    
     try:
         response = requests.post(url, headers=headers, data=json.dumps(data))
         response_data = response.json()
         if response.ok:
-            return response_data['choices'][0]['message']['content']
+            response_text = response_data['choices'][0]['message']['content']
+            
+            # Generate follow-up questions for the response
+            try:
+                # Always try to generate follow-up questions
+                followup_questions = generate_followup_questions(
+                    chat_history + [(new_question, response_text)], 
+                    new_question, 
+                    response_text
+                )
+                logger.info(f"Generated follow-up questions: {followup_questions}")
+            except Exception as e:
+                logger.error(f"Error generating follow-up questions: {str(e)}")
+                followup_questions = []
+            
+            return response_text, followup_questions
         else:
-            return f"Error {response.status_code}: {response_data['error']['message']}"
+            error_msg = response_data.get('error')
+            if isinstance(error_msg, dict):
+                error_msg = error_msg.get('message', 'Unknown error')
+            return f"Error {response.status_code}: {error_msg}", []
     except Exception as e:
-        return f"Error generating response: {str(e)}"
+        logger.error(f"Error generating response: {str(e)}")
+        return f"Error generating response: {str(e)}", []
+
+class ClearContextIntentHandler(AbstractRequestHandler):
+    """Handler for clearing conversation context."""
+    def can_handle(self, handler_input):
+        # type: (HandlerInput) -> bool
+        return ask_utils.is_intent_name("ClearContextIntent")(handler_input)
+
+    def handle(self, handler_input):
+        # type: (HandlerInput) -> Response
+        session_attr = handler_input.attributes_manager.session_attributes
+        session_attr["chat_history"] = []
+        session_attr["last_context"] = None
+        
+        speak_output = "I've cleared our conversation history. What would you like to talk about?"
+        
+        return (
+            handler_input.response_builder
+                .speak(speak_output)
+                .ask(speak_output)
+                .response
+        )
 
 sb = SkillBuilder()
 
 sb.add_request_handler(LaunchRequestHandler())
-sb.add_request_handler(GptQueryIntentHandler())
+sb.add_request_handler(GrokQueryIntentHandler())
+sb.add_request_handler(ClearContextIntentHandler())
 sb.add_request_handler(CancelOrStopIntentHandler())
 sb.add_exception_handler(CatchAllExceptionHandler())
 
@@ -253,9 +436,13 @@ lambda_handler = sb.lambda_handler()
 ```
 
 ### 12.
-Put your OpenAI API key that you got from your [OpenAI account](https://platform.openai.com/api-keys)
+It is highly recommended to use **Environment Variables** for your API key instead of hardcoding it. In the Alexa Developer Console:
+1. Go to the "Code" tab.
+2. Click on "Environment Variables" in the sidebar.
+3. Add a variable named `XAI_API_KEY` and paste your key.
+4. If you prefer to hardcode it for testing, replace `YOUR_API_KEY` in `lambda_function.py`.
 
-![openai_api_key](images/api_key.png)
+![xai_api_key](images/api_key.png)
 
 ### 13.
 Save and deploy. Go to "Test" section and enable "Skill testing" in "Development".
